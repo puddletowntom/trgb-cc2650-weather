@@ -7,8 +7,10 @@ boards.
 ```
   CC2650 SensorTag (stock TI BLE firmware)      LilyGO T-RGB 2.1" (ESP32-S3)
   +------------------------------+              +---------------------------+
-  | HDC1000 ambient T/RH         |  BLE 2.4GHz  | BLE central               |
-  | Humidity service F000AA20... | ~~~~~~~~~~~~ | scan -> connect -> notify |
+  | HDC1000 humidity             |  BLE 2.4GHz  | BLE central               |
+  | TMP007 ambient temperature   | ~~~~~~~~~~~~ | scan -> connect -> notify |
+  | Humidity svc F000AA20...     |              |                           |
+  | IR temp svc  F000AA00...     |              |                           |
   | advertises "SensorTag"       |              | 480x480 round RGB panel   |
   +------------------------------+              +---------------------------+
 ```
@@ -28,7 +30,7 @@ wired variant, kept as an alternative/fallback.
 
 | Path | What it is |
 |---|---|
-| `display/trgb_temp_humidity.ino` | Arduino sketch for the T-RGB: BLE central + graphics |
+| `display/trgb_temp_humidity/trgb_temp_humidity.ino` | Arduino sketch for the T-RGB: BLE central + graphics |
 | `display/preview.png` | Render of the display design |
 | `sensortag/main.c` | Bare-metal CC2650 firmware: HDC1000 over I2C, results to RAM |
 | `sensortag/build.sh` | arm-none-eabi build for the SensorTag image |
@@ -76,15 +78,29 @@ counters/values.
 | Config (write) | `F000AA22-...` write `0x01` to start measuring |
 | Period | `F000AA23-...` default 1000 ms |
 
-Conversion (TI's formula, applied in the sketch):
+### IR temperature service (TMP007)
+
+| Item | Value |
+|---|---|
+| Service | `F000AA00-0451-4000-B000-000000000000` |
+| Data (notify) | `F000AA01-...` 4 bytes: obj LSB, obj MSB, amb LSB, amb MSB |
+| Config (write) | `F000AA02-...` write `0x01` to start measuring |
+| Period | `F000AA03-...` default 1000 ms |
+
+Conversions applied in the sketch:
 
 ```
-T  = raw_t / 65536 * 165 - 40          degC  (raw_t signed 16-bit)
-RH = (raw_rh & 0xFFFC) / 65536 * 100    %     (low 2 bits are status)
+HDC1000  T  = raw_t / 65536 * 165 - 40        degC  (raw_t signed 16-bit)
+HDC1000  RH = (raw_rh & 0xFFFC) / 65536 * 100  %     (low 2 bits are status)
+TMP007   T_amb = raw_amb / 128.0              degC  (bytes 2..3, signed 16-bit)
 ```
 
-The HDC1000 is the ambient sensor. The TMP007 IR thermopile is deliberately
-unused.
+**Which temperature is on screen:** the TMP007's ambient (die) channel, which is
+the figure the phone app labels "Ambient". Humidity comes from the HDC1000. The
+HDC1000's own temperature is decoded and kept as a fallback in case AA01 never
+arrives. Note the TMP007's die temperature runs a little warm from its own
+self-heating, so it is not a precision room thermometer — it is there because it
+matches what the phone app shows.
 
 ---
 
@@ -100,8 +116,8 @@ core 3.x and fails to compile against IDF 4.4). Verified compiling with core
 2.0.11 + GFX 1.4.9, 2.1" panel variant:
 
 ```
-Sketch uses 951489 bytes (72%) of program storage space.
-Global variables use 43660 bytes (13%) of dynamic memory.
+Sketch uses 952809 bytes (72%) of program storage space.
+Global variables use 43716 bytes (13%) of dynamic memory.
 ```
 
 The BLE stack is the bulk of that flash — roughly 615 KB more than the wired
@@ -130,9 +146,9 @@ build fails with `variable or field 'drawScreen' declared void`.
 
 ```
 arduino-cli compile -b "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,CDCOnBoot=cdc" \
-  display
+  display/trgb_temp_humidity
 arduino-cli upload  -b "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,CDCOnBoot=cdc" \
-  -p COM5 display
+  -p COM5 display/trgb_temp_humidity
 ```
 
 ### What it draws
@@ -140,8 +156,8 @@ arduino-cli upload  -b "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,CDCOnBoot=cd
 * 480x480 radial gradient; outer 260° arc = temperature (−10..40 °C) with a
   blue → teal → amber → red gradient and a glowing tip at the value.
 * Inner thin arc = humidity 0..100 %RH.
-* Big 7-segment ambient temperature with °C, droplet + humidity, dew point,
-  min/max since boot.
+* Big 7-segment temperature (TMP007 ambient) with °C, droplet + humidity, dew
+  point, min/max since boot.
 * Status badge: green LIVE, amber STALE (>5 s without a packet), red NO DATA.
 
 The image is composed into a PSRAM framebuffer and blitted in one go. BLE runs on
@@ -158,6 +174,7 @@ reading.
 [BLE] found SensorTag (xx:xx:xx:xx:xx:xx)
 [BLE] connected
 [BLE] humidity notifications on
+[BLE] IR temp notifications on
 ```
 
 If it prints "found" but never "connected", the tag is already paired to a phone —

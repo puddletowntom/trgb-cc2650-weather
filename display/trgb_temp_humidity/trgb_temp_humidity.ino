@@ -5,10 +5,19 @@
  * TI's stock firmware and advertises the Humidity service; this board is the
  * BLE central and draws the reading.  No wires between the boards.
  *
- * Service F000AA20-0451-4000-B000-000000000000
+ * Humidity service F000AA20-0451-4000-B000-000000000000
  *   AA21  data   (notify) 4 bytes: temp LSB, temp MSB, hum LSB, hum MSB
  *   AA22  config (write)  0x01 = start measuring
  *   Conversion: T = raw/65536*165 - 40,  RH = (raw & 0xFFFC)/65536*100
+ *
+ * IR temperature service F000AA00-0451-4000-B000-000000000000
+ *   AA01  data   (notify) 4 bytes: obj LSB, obj MSB, amb LSB, amb MSB
+ *   AA02  config (write)  0x01 = start measuring
+ *   Ambient (die) temperature = raw/128.0 degC  -> this is what we display
+ *
+ * The temperature on screen is the TMP007's ambient (die) channel, matching
+ * what the phone app reports.  Humidity comes from the HDC1000.  The HDC1000's
+ * own temperature is kept as a fallback if AA01 never arrives.
  *
  * NOTE ON THE BUS: the Grove I2C pins are shared with the XL9535 expander that
  * initialises the ST7701S.  I2C is used once, for panel init, then left alone.
@@ -168,9 +177,12 @@ static size_t    fbBytes = (size_t)W * H * 2;
 // Declared before the first function on purpose: the Arduino preprocessor
 // injects generated prototypes there, and they must be able to name this type.
 struct Reading {
-    float t = 0, h = 0, dew = 0;
+    float t = 0;        // temperature drawn on screen (TMP007 ambient)
+    float tHdc = 0;     // HDC1000 temperature (fallback source)
+    float h = 0, dew = 0;
     float tmin = 99, tmax = -99;
     bool  valid = false;
+    bool  irOk = false; // true once AA01 has delivered a TMP007 reading
     uint32_t ms = 0;
     uint8_t seq = 0;
     bool  sensorOk = false;
@@ -528,6 +540,9 @@ static void drawScreen(Reading &r, bool fresh, bool ever)
 static BLEUUID SVC_HUM ("f000aa20-0451-4000-b000-000000000000");
 static BLEUUID CH_DATA ("f000aa21-0451-4000-b000-000000000000");
 static BLEUUID CH_CONF ("f000aa22-0451-4000-b000-000000000000");
+static BLEUUID SVC_IR  ("f000aa00-0451-4000-b000-000000000000");
+static BLEUUID CH_IR_DATA ("f000aa01-0451-4000-b000-000000000000");
+static BLEUUID CH_IR_CONF ("f000aa02-0451-4000-b000-000000000000");
 static BLEUUID CCCD    ("00002902-0000-1000-8000-00805f9b34fb");
 
 static Reading reading;
@@ -536,27 +551,54 @@ static volatile bool     bleUp = false;
 static volatile uint32_t lastPacketMs = 0;
 static volatile uint32_t pktCount = 0;
 
-// ---- notification callback (runs in the BT task) ---------------------------
+// ---- notification callbacks (run in the BT task) ---------------------------
+// Caller must hold rMux.
+static void applyReading(Reading &r)
+{
+    if (!r.valid) { r.tmin = r.t; r.tmax = r.t; }
+    else {
+        if (r.t < r.tmin) r.tmin = r.t;
+        if (r.t > r.tmax) r.tmax = r.t;
+    }
+    dewp(r.t, r.h < 1.0f ? 1.0f : r.h, &r.dew);
+    r.valid = true;
+    r.sensorOk = true;
+    r.ms = millis();
+    r.seq = (uint8_t)pktCount;
+}
+
+// HDC1000 — humidity (and its own temperature, kept as a fallback)
 static void onHumidity(BLERemoteCharacteristic *ch, uint8_t *data, size_t len, bool isNotify)
 {
     if (len < 4) return;
     int16_t  traw = (int16_t)((uint16_t)data[0] | ((uint16_t)data[1] << 8));
     uint16_t hraw = (uint16_t)((uint16_t)data[2] | ((uint16_t)data[3] << 8));
-    float t = ((float)traw / 65536.0f) * 165.0f - 40.0f;
-    float h = ((float)(hraw & 0xFFFC) / 65536.0f) * 100.0f;
+    float tHdc = ((float)traw / 65536.0f) * 165.0f - 40.0f;
+    float h    = ((float)(hraw & 0xFFFC) / 65536.0f) * 100.0f;
     if (h > 100.0f) h = 100.0f;
     if (h < 0.0f)   h = 0.0f;
 
     portENTER_CRITICAL(&rMux);
-    if (!reading.valid || t < reading.tmin) reading.tmin = t;
-    if (!reading.valid || t > reading.tmax) reading.tmax = t;
-    reading.t = t;
     reading.h = h;
-    dewp(t, h < 1.0f ? 1.0f : h, &reading.dew);
-    reading.valid = true;
-    reading.ms = millis();
-    reading.seq = (uint8_t)pktCount;
-    reading.sensorOk = true;
+    reading.tHdc = tHdc;
+    if (!reading.irOk) reading.t = tHdc;      // fallback until TMP007 reports
+    applyReading(reading);
+    lastPacketMs = millis();
+    pktCount++;
+    portEXIT_CRITICAL(&rMux);
+}
+
+// TMP007 — ambient (die) temperature, bytes 2..3 of the AA01 payload
+static void onIRTemp(BLERemoteCharacteristic *ch, uint8_t *data, size_t len, bool isNotify)
+{
+    if (len < 4) return;
+    int16_t rawAmb = (int16_t)((uint16_t)data[2] | ((uint16_t)data[3] << 8));
+    float tAmb = rawAmb / 128.0f;             // TMP007 ambient, degC
+
+    portENTER_CRITICAL(&rMux);
+    reading.t = tAmb;
+    reading.irOk = true;
+    applyReading(reading);
     lastPacketMs = millis();
     pktCount++;
     portEXIT_CRITICAL(&rMux);
@@ -623,6 +665,22 @@ static void bleTask(void *)
                         }
                     } else {
                         Serial.println("[BLE] humidity service missing");
+                    }
+
+                    // TMP007 IR service — ambient (die) channel drives the display
+                    BLERemoteService *ir = c->getService(SVC_IR);
+                    if (ir) {
+                        BLERemoteCharacteristic *iconf = ir->getCharacteristic(CH_IR_CONF);
+                        BLERemoteCharacteristic *idata = ir->getCharacteristic(CH_IR_DATA);
+                        if (iconf) iconf->writeValue((uint8_t)0x01);   // start measuring
+                        if (idata && idata->canNotify()) {
+                            idata->registerForNotify(onIRTemp);
+                            BLERemoteDescriptor *d2 = idata->getDescriptor(CCCD);
+                            if (d2) { uint8_t en[2] = { 0x01, 0x00 }; d2->writeValue(en, 2, true); }
+                            Serial.println("[BLE] IR temp notifications on");
+                        }
+                    } else {
+                        Serial.println("[BLE] IR service missing");
                     }
                 } else {
                     Serial.println("[BLE] connect failed");
