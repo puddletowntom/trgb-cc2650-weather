@@ -29,7 +29,6 @@
  */
 
 #define PANEL_2_8_INCH  0   // 1 = 2.8" full circle, 0 = 2.1" (this board is 2.1")
-#define DEBUG_BLE       1   // 1 = print raw sensor bytes + heartbeat to serial
 
 // Forward declaration FIRST: the Arduino builder injects generated function
 // prototypes immediately after the last #include, which is above the full
@@ -587,22 +586,12 @@ static void onHumidity(BLERemoteCharacteristic *ch, uint8_t *data, size_t len, b
     lastPacketMs = millis();
     pktCount++;
     portEXIT_CRITICAL(&rMux);
-
-#if DEBUG_BLE
-    static uint32_t lastHumLog = 0;
-    if (millis() - lastHumLog > 3000) {
-        lastHumLog = millis();
-        Serial.printf("[HUM] rawT=%d rawH=%d  tHdc=%.2f  rh=%.2f\n",
-                      (int)traw, (int)hraw, tHdc, h);
-    }
-#endif
 }
 
 // TMP007 — ambient (die) temperature, bytes 2..3 of the AA01 payload
 static void onIRTemp(BLERemoteCharacteristic *ch, uint8_t *data, size_t len, bool isNotify)
 {
     if (len < 4) return;
-    int16_t rawObj = (int16_t)((uint16_t)data[0] | ((uint16_t)data[1] << 8));
     int16_t rawAmb = (int16_t)((uint16_t)data[2] | ((uint16_t)data[3] << 8));
     float tAmb = rawAmb / 128.0f;             // TMP007 ambient, degC
 
@@ -613,15 +602,6 @@ static void onIRTemp(BLERemoteCharacteristic *ch, uint8_t *data, size_t len, boo
     lastPacketMs = millis();
     pktCount++;
     portEXIT_CRITICAL(&rMux);
-
-#if DEBUG_BLE
-    static uint32_t lastIrLog = 0;
-    if (millis() - lastIrLog > 3000) {
-        lastIrLog = millis();
-        Serial.printf("[IR ] raw0=%d raw1=%d  v0=%.2f v1=%.2f\n",
-                      (int)rawObj, (int)rawAmb, rawObj / 128.0f, rawAmb / 128.0f);
-    }
-#endif
 }
 
 // ---- client callbacks -------------------------------------------------------
@@ -642,16 +622,6 @@ static BLEAdvertisedDevice *foundDev = nullptr;
 class ScanCB : public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice dev) override {
         if (foundDev) return;
-#if DEBUG_BLE
-        static uint32_t lastScanLog = 0;
-        if (millis() - lastScanLog > 1200) {
-            lastScanLog = millis();
-            Serial.printf("[SCAN] %s rssi=%d name=%s svc=%d\n",
-                          dev.getAddress().toString().c_str(), dev.getRSSI(),
-                          dev.haveName() ? dev.getName().c_str() : "-",
-                          dev.haveServiceUUID() ? 1 : 0);
-        }
-#endif
         bool nameHit = dev.haveName() && dev.getName().find("SensorTag") != std::string::npos;
         bool svcHit  = dev.haveServiceUUID() && dev.getServiceUUID().equals(SVC_HUM);
         if (nameHit || svcHit) {
@@ -773,14 +743,6 @@ void loop()
     portEXIT_CRITICAL(&rMux);
 
     bool fresh = snap.valid && (millis() - last < 5000);
-#if DEBUG_BLE
-    static uint32_t lastBeat = 0;
-    if (millis() - lastBeat > 3000) {
-        lastBeat = millis();
-        Serial.printf("[BEAT] t=%.2f tHdc=%.2f rh=%.2f irOk=%d up=%d\n",
-                      snap.t, snap.tHdc, snap.h, snap.irOk ? 1 : 0, bleUp ? 1 : 0);
-    }
-#endif
     if (millis() - lastDraw > 500) {
         lastDraw = millis();
         drawScreen(snap, fresh, snap.valid);

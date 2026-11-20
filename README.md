@@ -125,8 +125,8 @@ core 3.x and fails to compile against IDF 4.4). Verified compiling with core
 2.0.11 + GFX 1.4.9, 2.1" panel variant:
 
 ```
-Sketch uses 953573 bytes (72%) of program storage space.
-Global variables use 43732 bytes (13%) of dynamic memory.
+Sketch uses 952885 bytes (72%) of program storage space.
+Global variables use 43716 bytes (13%) of dynamic memory.
 ```
 
 The BLE stack is the bulk of that flash — roughly 615 KB more than the wired
@@ -159,12 +159,6 @@ arduino-cli compile -b "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,CDCOnBoot=cd
 arduino-cli upload  -b "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,CDCOnBoot=cdc" \
   -p COM5 display/trgb_temp_humidity
 ```
-
-### Serial diagnostics
-
-`DEBUG_BLE` at the top of the sketch: `1` prints a heartbeat, the raw counts from
-both sensors and every BLE advertisement seen; `0` leaves the serial port quiet.
-Set it to `0` for a production build.
 
 ### What it draws
 
