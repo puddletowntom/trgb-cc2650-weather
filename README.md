@@ -95,12 +95,21 @@ HDC1000  RH = (raw_rh & 0xFFFC) / 65536 * 100  %     (low 2 bits are status)
 TMP007   T_amb = raw_amb / 128.0              degC  (bytes 2..3, signed 16-bit)
 ```
 
-**Which temperature is on screen:** the TMP007's ambient (die) channel, which is
-the figure the phone app labels "Ambient". Humidity comes from the HDC1000. The
-HDC1000's own temperature is decoded and kept as a fallback in case AA01 never
-arrives. Note the TMP007's die temperature runs a little warm from its own
-self-heating, so it is not a precision room thermometer — it is there because it
-matches what the phone app shows.
+**Which temperature is on screen:** the TMP007's ambient (die) channel. Humidity
+comes from the HDC1000. The HDC1000's own temperature is decoded and kept as a
+fallback in case AA01 never arrives.
+
+Measured on the bench, both chips agree to within ~0.3 °C because they sit on the
+same board at the same temperature — TMP007 ambient 14.53 °C, HDC1000 14.85 °C in
+the same second. Switching source therefore changes the display by a fraction of
+a degree, not by several degrees. The TMP007's die runs a little warm from its own
+self-heating, so neither figure is a precision room thermometer.
+
+The phone app's "temperature" figure was observed to read ~3.5 °C lower than the
+TMP007 ambient register in the same conditions. That is not the ambient register
+reporting two values at once — it is a different channel or a compensated value.
+The display deliberately shows the raw ambient register and does not apply a
+fudge offset to match the app.
 
 ---
 
@@ -116,8 +125,8 @@ core 3.x and fails to compile against IDF 4.4). Verified compiling with core
 2.0.11 + GFX 1.4.9, 2.1" panel variant:
 
 ```
-Sketch uses 952809 bytes (72%) of program storage space.
-Global variables use 43716 bytes (13%) of dynamic memory.
+Sketch uses 953573 bytes (72%) of program storage space.
+Global variables use 43732 bytes (13%) of dynamic memory.
 ```
 
 The BLE stack is the bulk of that flash — roughly 615 KB more than the wired
@@ -150,6 +159,12 @@ arduino-cli compile -b "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,CDCOnBoot=cd
 arduino-cli upload  -b "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,CDCOnBoot=cdc" \
   -p COM5 display/trgb_temp_humidity
 ```
+
+### Serial diagnostics
+
+`DEBUG_BLE` at the top of the sketch: `1` prints a heartbeat, the raw counts from
+both sensors and every BLE advertisement seen; `0` leaves the serial port quiet.
+Set it to `0` for a production build.
 
 ### What it draws
 
