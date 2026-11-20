@@ -1,0 +1,18 @@
+# Build artefacts
+*.o
+*.obj
+*.elf
+*.bin
+*.map
+*.hex
+*.d
+
+# TI driverlib / SDK — supply your own copy of cc26xxware
+cc26xxware/
+CC2650SensorTag_BLE_*.hex
+
+# Arduino / editor noise
+build/
+*.tmp
+.DS_Store
+Thumbs.db
